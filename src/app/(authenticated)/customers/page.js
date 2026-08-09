@@ -385,17 +385,109 @@ export default function CustomersPage() {
 
     try {
       const year = new Date().getFullYear();
-      
-      // 1. Generate unique order/payment receipt number
-      const { data: countData } = await supabase
+
+      // 1. Fetch all unpaid or partially paid orders for this customer (oldest first)
+      const { data: unpaidOrders, error: fetchOrdersErr } = await supabase
         .from("orders")
-        .select("id")
+        .select("*")
+        .eq("customer_id", selectedCust.id)
+        .in("status", ["pending", "partially_paid"])
+        .order("created_at", { ascending: true });
+
+      if (fetchOrdersErr) throw fetchOrdersErr;
+
+      let remainingPayment = amount;
+      const ordersToUpdate = [];
+
+      if (unpaidOrders && unpaidOrders.length > 0) {
+        for (const order of unpaidOrders) {
+          if (remainingPayment <= 0) break;
+          
+          const orderBalance = Number(order.balance_amount || 0);
+          if (orderBalance <= 0) continue;
+
+          const apply = Math.min(remainingPayment, orderBalance);
+          const nextPaid = Number(order.paid_amount || 0) + apply;
+          const nextBalance = orderBalance - apply;
+          
+          let nextStatus = "pending";
+          if (nextBalance <= 0) {
+            nextStatus = "paid";
+          } else if (nextPaid > 0) {
+            nextStatus = "partially_paid";
+          }
+
+          ordersToUpdate.push({
+            id: order.id,
+            order_number: order.order_number,
+            paid_amount: nextPaid,
+            balance_amount: nextBalance,
+            status: nextStatus,
+            total_amount: order.total_amount
+          });
+
+          remainingPayment -= apply;
+        }
+      }
+
+      // 2. Perform the database updates for all allocated orders
+      for (const update of ordersToUpdate) {
+        const { error: oUpdateErr } = await supabase
+          .from("orders")
+          .update({
+            paid_amount: update.paid_amount,
+            balance_amount: update.balance_amount,
+            status: update.status
+          })
+          .eq("id", update.id);
+        
+        if (oUpdateErr) throw oUpdateErr;
+
+        // Sync the updated order back to Google Sheets
+        try {
+          await fetch("/api/sync-sheets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: update.id,
+              order_number: update.order_number,
+              customer_name: selectedCust.name,
+              customer_phone: selectedCust.phone,
+              total_amount: update.total_amount,
+              paid_amount: update.paid_amount,
+              balance_amount: update.balance_amount,
+              status: update.status,
+              handled_by: profile?.username || "Unknown"
+            })
+          });
+        } catch (sheetErr) {
+          console.error("Sheets sync failed for order update:", sheetErr);
+        }
+      }
+
+      // 3. Generate unique order/payment receipt number based on max existing PAY- number
+      const { data: existingOrders } = await supabase
+        .from("orders")
+        .select("order_number")
         .gte("created_at", new Date(year, 0, 1).toISOString());
 
-      const seq = ((countData?.length || 0) + 1).toString().padStart(4, "0");
+      let maxSeq = 0;
+      if (existingOrders && existingOrders.length > 0) {
+        existingOrders.forEach(o => {
+          if (o.order_number && o.order_number.startsWith(`PAY-${year}-`)) {
+            const parts = o.order_number.split("-");
+            const numPart = parseInt(parts[parts.length - 1]);
+            if (!isNaN(numPart) && numPart > maxSeq) {
+              maxSeq = numPart;
+            }
+          }
+        });
+      }
+
+      const seq = (maxSeq + 1).toString().padStart(4, "0");
       const paymentNum = `PAY-${year}-${seq}`;
 
-      // 2. Insert Payment Transaction in Orders table (so it counts as received money for the day)
+      // 4. Insert Payment Transaction in Orders table (balance_amount is only negative if there's a true remaining credit overpaid)
       const { data: paymentOrder, error: oError } = await supabase
         .from("orders")
         .insert({
@@ -403,7 +495,7 @@ export default function CustomersPage() {
           customer_id: selectedCust.id,
           total_amount: 0,
           paid_amount: amount,
-          balance_amount: -amount,
+          balance_amount: remainingPayment > 0 ? -remainingPayment : 0,
           status: "paid",
           items: [{ name: paymentNote.trim() || "Account Balance Payment", qty: 1, price: 0, total: 0 }],
           created_by: profile?.username || "Unknown",
@@ -414,7 +506,7 @@ export default function CustomersPage() {
 
       if (oError) throw oError;
 
-      // 3. Update outstanding balance in Customers table
+      // 5. Update outstanding balance in Customers table
       const { data: latestCust } = await supabase
         .from("customers")
         .select("outstanding_balance")
@@ -429,7 +521,7 @@ export default function CustomersPage() {
         .eq("id", selectedCust.id);
       if (cError) throw cError;
 
-      // 4. Sheets Sync
+      // 6. Sheets Sync for the Payment receipt itself
       try {
         await fetch("/api/sync-sheets", {
           method: "POST",
@@ -444,13 +536,19 @@ export default function CustomersPage() {
         console.error("Sheets sync failed:", sheetErr);
       }
 
-      // 5. Update local state
+      // 7. Update local state
       const updatedCust = { ...selectedCust, outstanding_balance: newBalance };
       setSelectedCust(updatedCust);
       setCustomers(prev => prev.map(c => c.id === selectedCust.id ? updatedCust : c));
       
-      // Also fetch and append to local orders history
-      setCustOrders(prev => [paymentOrder, ...prev]);
+      // Re-fetch all orders for this customer to ensure we have the updated balances and statuses displayed in the UI list!
+      const { data: refreshedOrders } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("customer_id", selectedCust.id)
+        .order("created_at", { ascending: false });
+      
+      setCustOrders(refreshedOrders || []);
 
       setShowPaymentModal(false);
       setPaymentAmount("");

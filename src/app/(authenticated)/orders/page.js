@@ -195,8 +195,8 @@ export default function OrdersPage() {
 
       if (oError) throw oError;
 
-      // 3. Deduct Customer Outstanding Debt if registered customer and balance exists
-      if (selectedOrder.customers && selectedOrder.balance_amount > 0) {
+      // 3. Deduct Customer Outstanding Debt if registered customer and balance is non-zero
+      if (selectedOrder.customers && Number(selectedOrder.balance_amount || 0) !== 0) {
         const isWalkIn = selectedOrder.customers.name.toLowerCase().includes("walk-in") || selectedOrder.customers.name.toLowerCase().includes("unknown");
         if (!isWalkIn) {
           const { data: latestCust } = await supabase
@@ -208,7 +208,7 @@ export default function OrdersPage() {
           const { error: cError } = await supabase
             .from("customers")
             .update({
-              outstanding_balance: Math.max(0, latestBalance - selectedOrder.balance_amount)
+              outstanding_balance: latestBalance - Number(selectedOrder.balance_amount || 0)
             })
             .eq("id", selectedOrder.customer_id);
           if (cError) console.error("Error updating customer outstanding balance:", cError);

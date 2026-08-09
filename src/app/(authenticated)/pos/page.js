@@ -688,10 +688,10 @@ export default function POSPage() {
       const date = new Date();
       const year = date.getFullYear();
 
-      // 1. Fetch count of orders to generate order number
-      const { data: countData } = await supabase
+      // 1. Fetch existing orders this year to find the maximum sequence number
+      const { data: existingOrders } = await supabase
         .from("orders")
-        .select("id")
+        .select("order_number")
         .gte("created_at", new Date(year, 0, 1).toISOString());
 
       let orderPrefix = "ORD";
@@ -702,7 +702,21 @@ export default function POSPage() {
         if (s.orderStartNumber) orderStartNumber = Math.max(1, parseInt(s.orderStartNumber) || 1);
       } catch (_) {}
 
-      const seq = ((countData?.length || 0) + orderStartNumber).toString().padStart(4, "0");
+      let maxSeq = 0;
+      if (existingOrders && existingOrders.length > 0) {
+        existingOrders.forEach(o => {
+          if (o.order_number && o.order_number.startsWith(`${orderPrefix}-${year}-`)) {
+            const parts = o.order_number.split("-");
+            const numPart = parseInt(parts[parts.length - 1]);
+            if (!isNaN(numPart) && numPart > maxSeq) {
+              maxSeq = numPart;
+            }
+          }
+        });
+      }
+
+      const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
+      const seq = nextSeq.toString().padStart(4, "0");
       const orderNum = `${orderPrefix}-${year}-${seq}`;
 
       // 2. Insert Order for Advance Payment
@@ -888,13 +902,27 @@ export default function POSPage() {
       }
 
       if (isQuotation) {
-        // 1. Generate Quotation ID (count all quotations this year)
-        const { data: countData } = await supabase
+        // 1. Fetch existing quotations this year to find the maximum sequence number
+        const { data: existingQuotes } = await supabase
           .from("quotations")
-          .select("id")
+          .select("quotation_number")
           .gte("created_at", new Date(year, 0, 1).toISOString());
 
-        const seq = ((countData?.length || 0) + orderStartNumber).toString().padStart(4, "0");
+        let maxSeq = 0;
+        if (existingQuotes && existingQuotes.length > 0) {
+          existingQuotes.forEach(q => {
+            if (q.quotation_number && q.quotation_number.startsWith(`QT-${year}-`)) {
+              const parts = q.quotation_number.split("-");
+              const numPart = parseInt(parts[parts.length - 1]);
+              if (!isNaN(numPart) && numPart > maxSeq) {
+                maxSeq = numPart;
+              }
+            }
+          });
+        }
+
+        const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
+        const seq = nextSeq.toString().padStart(4, "0");
         const quotationNum = `QT-${year}-${seq}`;
 
         // 2. Insert Quotation
@@ -935,13 +963,27 @@ export default function POSPage() {
         }, 1500);
 
       } else {
-        // 1. Generate Order ID (count all orders this year)
-        const { data: countData } = await supabase
+        // 1. Fetch existing orders this year to find the maximum sequence number
+        const { data: existingOrders } = await supabase
           .from("orders")
-          .select("id")
+          .select("order_number")
           .gte("created_at", new Date(year, 0, 1).toISOString());
 
-        const seq = ((countData?.length || 0) + orderStartNumber).toString().padStart(4, "0");
+        let maxSeq = 0;
+        if (existingOrders && existingOrders.length > 0) {
+          existingOrders.forEach(o => {
+            if (o.order_number && o.order_number.startsWith(`${orderPrefix}-${year}-`)) {
+              const parts = o.order_number.split("-");
+              const numPart = parseInt(parts[parts.length - 1]);
+              if (!isNaN(numPart) && numPart > maxSeq) {
+                maxSeq = numPart;
+              }
+            }
+          });
+        }
+
+        const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
+        const seq = nextSeq.toString().padStart(4, "0");
         const orderNum = `${orderPrefix}-${year}-${seq}`;
 
         const isRegisteredCust = customerToUse && 

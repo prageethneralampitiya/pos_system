@@ -190,6 +190,56 @@ We added a dedicated payments workflow directly inside client registry cards to 
 
 ---
 
+## 18. Sequence Numbering Optimization (Duplicate Key Fix)
+
+We resolved a duplicate key constraint error (`duplicate key value violates unique constraint "orders_order_number_key"`) on checkout:
+
+1. **Root Cause**:
+   - Previously, the POS generated invoice/quotation sequence numbers (e.g., `ORD-2026-0034`) by counting the total rows in the database table (`countData.length`).
+   - If any historical record was deleted, or if custom transaction numbers (like `PAY-` payments) were inserted, the row count was lower than the actual highest sequence number.
+   - This resulted in generating a sequence number that had already been used, causing a unique database constraint violation and crashing the checkout process.
+
+2. **True Maximum Sequence Tracking**:
+   - Replaced row counts in the POS system checkout, advance payments, and customer ledger panels.
+   - The app now queries all existing codes for the current year, parses the suffix integers of codes matching the current prefix, identifies the actual maximum sequence number, and increments it by `1`.
+   - This guarantees that sequence codes always grow sequentially (e.g. `ORD-2026-0001` -> `ORD-2026-0002` -> `ORD-2026-0003`) and never duplicate, even if rows are deleted, payments are registered, or multiple checkout points are used.
+
+---
+
+## 19. Debt Allocation & Payment Offsets
+
+We upgraded the client account payments module to allocate incoming cash payments to outstanding/unpaid invoices:
+
+1. **Root Cause of Overpaid/Negative Labels**:
+   - Previously, clicking the "Payments" button on a customer's registry card registered a standalone invoice `PAY-XXXX` with a negative balance (`balance_amount = -amount`), without modifying the original unpaid invoice(s) (`ORD-XXXX`).
+   - This left the original invoice marked as unpaid, while the payment transaction itself showed a confusing negative balance (which the system styled as an "overpayment" or "credit balance" on that specific invoice slip).
+
+2. **Automated FIFO Debt Allocation**:
+   - Updated `handleRecordPayment` to query all unpaid/partially paid invoices for the customer, ordered oldest first (First-In, First-Out).
+   - The received payment amount is sequentially allocated to pay off the outstanding balance of these invoices:
+     - Reduces the target order's `balance_amount` to `0` (or partial) and increases its `paid_amount` by the offset.
+     - Automatically updates the order's status to `paid` or `partially_paid` inside Supabase and updates the synced row in Google Sheets.
+   - Any leftover payment is recorded as the credit balance of the `PAY-XXXX` payment receipt itself (showing `0` if fully settled, or a negative value only if they paid more than their entire outstanding debt).
+   - The UI local cache is immediately refreshed by re-fetching the customer's database history so invoice list updates are instantly visible.
+
+---
+
+## 20. Order Voiding Outstanding Balance Correction
+
+We corrected a critical discrepancy where voiding a customer payment or order failed to reconcile the customer's outstanding balance:
+
+1. **Root Cause**:
+   - When an order was voided, the system checked if `selectedOrder.balance_amount > 0` before modifying the customer's `outstanding_balance`.
+   - Because payment records `PAY-XXXX` have negative balances (`balance_amount < 0`), voiding a payment record skipped this block entirely. This caused the customer's outstanding balance to remain reduced even after the payment was voided, falsely marking them in credit (e.g. Miss. Saumya Jayakodi was incorrectly shown in credit for `-600 LKR` because a voided payment of `600 LKR` did not add back to her balance).
+   - In addition, the use of `Math.max(0, ...)` prevented customer balances from properly reflecting account credits.
+
+2. **Accurate Void Offset & Database Repair**:
+   - Updated the conditional check in `orders/page.js` to `Number(selectedOrder.balance_amount || 0) !== 0`, ensuring both positive invoice voids and negative payment voids trigger the adjustment.
+   - Removed `Math.max(0, ...)` to support negative credit limits cleanly.
+   - Wrote and executed a database audit script (`audit_balances.js`) that inspected all customer records, recalculated their true balances based on their active (non-voided) invoice histories, and automatically repaired 6 affected customer accounts (including Miss. Saumya Jayakodi and Mr. Dilhara Dasanayake) back to perfect alignment.
+
+---
+
 ## 3. Verification
 
 ### Build Success
