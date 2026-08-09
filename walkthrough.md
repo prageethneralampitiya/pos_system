@@ -240,6 +240,16 @@ We corrected a critical discrepancy where voiding a customer payment or order fa
 
 ---
 
+## 21. Dashboard Sales Restriction for Staff Roles
+
+We restricted sensitive financial data on the main dashboard from unauthorized staff profiles:
+
+1. **Sales Today Card Hiding**:
+   - Modified `dashboard/page.js` to inspect user credentials via `profile.role`.
+   - If the logged-in user does not possess `owner` or `manager` roles (i.e. they are standard `staff`/cashiers), the dashboard card for **Sales Today** conceals the financial totals, rendering a clean `—` and the footer status label `Authorized Access Only` instead of daily sales stats.
+
+---
+
 ## 3. Verification
 
 ### Build Success

@@ -462,8 +462,16 @@ export default function DashboardPage() {
               </div>
               <span style={styles.cardHeaderTitle}>Sales Today</span>
             </div>
-            <div style={styles.statValue}>{formatCurrency(stats.todaySales)}</div>
-            <div style={styles.cardFooterText}>From {stats.todayOrdersCount} print orders today</div>
+            <div style={styles.statValue}>
+              {profile?.role === "owner" || profile?.role === "manager" 
+                ? formatCurrency(stats.todaySales) 
+                : "—"}
+            </div>
+            <div style={styles.cardFooterText}>
+              {profile?.role === "owner" || profile?.role === "manager"
+                ? `From ${stats.todayOrdersCount} print orders today`
+                : "Authorized Access Only"}
+            </div>
           </div>
 
           {/* Card 2: Today's Orders */}
