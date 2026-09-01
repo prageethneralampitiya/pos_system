@@ -174,6 +174,7 @@ export default function PortalPage() {
         .from("orders")
         .select("*")
         .eq("customer_id", custId)
+        .neq("status", "voided")
         .order("created_at", { ascending: false });
 
       if (error) throw error;

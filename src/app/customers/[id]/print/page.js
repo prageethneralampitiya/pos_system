@@ -71,11 +71,12 @@ export default function CustomerPrintPage() {
       if (cError) throw cError;
       setCustomer(cust);
 
-      // 2. Fetch Orders
+      // 2. Fetch Orders (excluding voided bills)
       let orderQuery = supabase
         .from("orders")
         .select("*")
-        .eq("customer_id", id);
+        .eq("customer_id", id)
+        .neq("status", "voided");
       
       if (startDateStr) {
         orderQuery = orderQuery.gte("created_at", new Date(startDateStr).toISOString());
@@ -173,8 +174,12 @@ export default function CustomerPrintPage() {
     );
   }
 
-  const totalDealsValue = orders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
-  const totalCollected = orders.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0);
+  const activeOrders = orders.filter(o => o.status !== "voided");
+  const salesOrders = activeOrders.filter(o => !o.order_number?.startsWith("PAY-") && Number(o.total_amount || 0) > 0);
+  const payOrders = activeOrders.filter(o => o.order_number?.startsWith("PAY-") || Number(o.total_amount || 0) === 0);
+
+  const totalDealsValue = salesOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+  const totalCollected = salesOrders.filter(o => o.status === "paid" && o.payment_method !== "pending").reduce((sum, o) => sum + Number(o.total_amount || 0), 0) + payOrders.reduce((sum, o) => sum + Number(o.paid_amount || 0), 0);
   const currentDebt = Number(customer.outstanding_balance || 0);
 
   return (
@@ -480,14 +485,14 @@ export default function CustomerPrintPage() {
             </tr>
           </thead>
           <tbody>
-            {orders.length === 0 ? (
+            {activeOrders.length === 0 ? (
               <tr>
                 <td colSpan="7" style={{ textAlign: "center", padding: "12px", color: "#4b5563" }}>
                   No billing history found for this client.
                 </td>
               </tr>
             ) : (
-              orders.map((o, idx) => (
+              activeOrders.map((o, idx) => (
                 <tr key={o.id}>
                   <td>{idx + 1}</td>
                   <td>{new Date(o.created_at).toLocaleDateString()}</td>

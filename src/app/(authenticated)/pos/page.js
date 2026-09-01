@@ -464,7 +464,7 @@ export default function POSPage() {
       discountType: "none",
       discountValue: 0,
       discountedPrice: Number(customPrice),
-      total: Number(customQty) * Number(customPrice)
+      total: Number((Number(customQty) * Number(customPrice)).toFixed(2))
     };
 
     setCart([...cart, newItem]);
@@ -481,7 +481,7 @@ export default function POSPage() {
     setCart(cart.map(item => {
       if (item.id === itemId) {
         const currentQty = item.qty === "" ? 1 : Number(item.qty);
-        const newQty = Math.max(1, currentQty + adjustment);
+        const newQty = Math.max(0.01, Number((currentQty + adjustment).toFixed(2)));
         const { discountedPrice, total } = calculateItemTotal(item.price, newQty, item.discountType, item.discountValue);
         return { ...item, qty: newQty, discountedPrice, total };
       }
@@ -512,9 +512,9 @@ export default function POSPage() {
     const item = cart.find(i => i.id === selectedCartItemId);
     if (!item) return;
     const currentQty = item.qty === "" ? "1" : String(item.qty);
-    const input = prompt(`Enter quantity for ${item.name}:`, currentQty);
+    const input = prompt(`Enter quantity for ${item.name} (e.g. 2.50):`, currentQty);
     if (input === null) return; // Cancelled
-    const val = parseInt(input);
+    const val = parseFloat(input);
     if (!isNaN(val) && val > 0) {
       handleSetQty(selectedCartItemId, val);
     } else {
@@ -1298,11 +1298,12 @@ export default function POSPage() {
                             </button>
                             <input 
                               type="number"
-                              min="1"
+                              min="0.01"
+                              step="any"
                               value={item.qty}
                               onClick={(e) => e.stopPropagation()}
                               onChange={(e) => {
-                                const val = parseInt(e.target.value);
+                                const val = parseFloat(e.target.value);
                                 if (!isNaN(val) && val > 0) {
                                   handleSetQty(item.id, val);
                                 } else if (e.target.value === "") {
@@ -1310,7 +1311,7 @@ export default function POSPage() {
                                 }
                               }}
                               onBlur={() => {
-                                if (item.qty === "" || item.qty <= 0) {
+                                if (item.qty === "" || Number(item.qty) <= 0) {
                                   handleSetQty(item.id, 1);
                                 }
                               }}
@@ -1949,7 +1950,9 @@ export default function POSPage() {
                   <label style={styles.modalLabel}>Quantity *</label>
                   <input 
                     type="number" 
-                    min="1"
+                    min="0.01"
+                    step="any"
+                    placeholder="e.g. 2.50"
                     className="input-field" 
                     value={customQty}
                     onChange={(e) => setCustomQty(e.target.value)}

@@ -22,7 +22,11 @@ import {
   MessageCircle,
   Trash2,
   AlertTriangle,
-  Lock
+  Lock,
+  Edit3,
+  Plus,
+  Save,
+  ShieldCheck
 } from "lucide-react";
 
 export default function OrdersPage() {
@@ -53,6 +57,13 @@ export default function OrdersPage() {
   const [voidError, setVoidError] = useState("");
   const [submittingVoid, setSubmittingVoid] = useState(false);
   const [profiles, setProfiles] = useState([]);
+
+  // Owner Edit Bill States
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editItems, setEditItems] = useState([]);
+  const [editSpecialNote, setEditSpecialNote] = useState("");
+  const [editError, setEditError] = useState("");
+  const [submittingEdit, setSubmittingEdit] = useState(false);
 
   const urlOrderId = searchParams.get("id");
   const autoPrint = searchParams.get("print") === "true";
@@ -258,6 +269,178 @@ export default function OrdersPage() {
       setVoidError(err.message || "Failed to void order.");
     } finally {
       setSubmittingVoid(false);
+    }
+  };
+
+  const handleOpenEditModal = () => {
+    if (profile?.role !== "owner") {
+      alert("Unauthorized: Only the Owner account has access to modify invoices.");
+      return;
+    }
+    if (!selectedOrder) return;
+    
+    const initialItems = (selectedOrder.items || []).map(item => ({
+      name: item.name || "",
+      qty: item.qty !== undefined ? item.qty : 1,
+      price: item.price !== undefined ? item.price : 0,
+      discount_type: item.discount_type || "none",
+      discount_value: item.discount_value !== undefined ? item.discount_value : 0,
+      total: item.total !== undefined ? item.total : ((Number(item.qty) || 1) * (Number(item.price) || 0))
+    }));
+
+    setEditItems(initialItems.length > 0 ? initialItems : [{ name: "", qty: 1, price: 0, discount_type: "none", discount_value: 0, total: 0 }]);
+    setEditSpecialNote(selectedOrder.special_note || "");
+    setEditError("");
+    setShowEditModal(true);
+  };
+
+  const handleItemFieldChange = (index, field, value) => {
+    setEditItems(prev => {
+      const updated = [...prev];
+      const item = { ...updated[index], [field]: value };
+      
+      const price = Number(field === "price" ? value : item.price) || 0;
+      const qty = Number(field === "qty" ? value : item.qty) || 0;
+      const dType = field === "discount_type" ? value : (item.discount_type || "none");
+      const dVal = Number(field === "discount_value" ? value : (item.discount_value || 0));
+      
+      let total = price * qty;
+      if (dType === "percentage") {
+        total = total - (total * (dVal / 100));
+      } else if (dType === "fixed") {
+        total = Math.max(0, total - dVal);
+      }
+      item.total = Math.round(total * 100) / 100;
+      
+      updated[index] = item;
+      return updated;
+    });
+  };
+
+  const handleAddItemRow = () => {
+    setEditItems(prev => [
+      ...prev,
+      { name: "", price: 0, qty: 1, discount_type: "none", discount_value: 0, total: 0 }
+    ]);
+  };
+
+  const handleRemoveItemRow = (index) => {
+    if (editItems.length <= 1) {
+      setEditError("Invoice must contain at least one item line.");
+      return;
+    }
+    setEditItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveEditInvoice = async (e) => {
+    e.preventDefault();
+    if (profile?.role !== "owner") {
+      setEditError("Unauthorized: Only the Owner account has access to edit bills.");
+      return;
+    }
+    if (!selectedOrder) return;
+
+    // Check item names and quantities
+    for (let i = 0; i < editItems.length; i++) {
+      if (!editItems[i].name || !editItems[i].name.trim()) {
+        setEditError(`Item line #${i + 1} description cannot be blank.`);
+        return;
+      }
+      if (Number(editItems[i].qty) <= 0) {
+        setEditError(`Item #${i + 1} quantity must be greater than 0.`);
+        return;
+      }
+    }
+
+    setSubmittingEdit(true);
+    setEditError("");
+
+    try {
+      const newTotal = editItems.reduce((sum, it) => sum + Number(it.total || 0), 0);
+      const paidAmt = Number(selectedOrder.paid_amount || 0);
+      const newBalance = Math.max(0, newTotal - paidAmt);
+      
+      let newStatus = selectedOrder.status;
+      if (selectedOrder.status !== "voided") {
+        if (newBalance === 0) {
+          newStatus = "paid";
+        } else if (paidAmt > 0) {
+          newStatus = "partially_paid";
+        } else {
+          newStatus = "pending";
+        }
+      }
+
+      // 1. Update Order in Supabase
+      const { data: updatedOrder, error: oError } = await supabase
+        .from("orders")
+        .update({
+          items: editItems,
+          total_amount: newTotal,
+          balance_amount: newBalance,
+          status: newStatus,
+          special_note: editSpecialNote?.trim() || null,
+        })
+        .eq("id", selectedOrder.id)
+        .select(`*, customers (*)`)
+        .single();
+
+      if (oError) throw oError;
+
+      // 2. Adjust Customer Outstanding Balance if registered customer and balance changed
+      const oldBalance = Number(selectedOrder.balance_amount || 0);
+      const balanceDiff = newBalance - oldBalance;
+      if (selectedOrder.customer_id && balanceDiff !== 0 && selectedOrder.status !== "voided") {
+        const isWalkIn = selectedOrder.customers?.name?.toLowerCase().includes("walk-in") || selectedOrder.customers?.name?.toLowerCase().includes("unknown");
+        if (!isWalkIn) {
+          const { data: latestCust } = await supabase
+            .from("customers")
+            .select("outstanding_balance")
+            .eq("id", selectedOrder.customer_id)
+            .single();
+          const currentCustBalance = latestCust ? Number(latestCust.outstanding_balance || 0) : 0;
+          const { error: cError } = await supabase
+            .from("customers")
+            .update({
+              outstanding_balance: Math.max(0, currentCustBalance + balanceDiff)
+            })
+            .eq("id", selectedOrder.customer_id);
+          if (cError) console.error("Error updating customer outstanding balance after bill edit:", cError);
+        }
+      }
+
+      // 3. Sync to Google Sheets
+      try {
+        fetch("/api/sync-sheets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            order_id: selectedOrder.id,
+            order_number: selectedOrder.order_number,
+            customer_name: selectedOrder.customers?.name || "Walk-in",
+            customer_phone: selectedOrder.customers?.phone || "0000000000",
+            total_amount: newTotal,
+            paid_amount: paidAmt,
+            balance_amount: newBalance,
+            status: newStatus,
+            items: editItems,
+            date: new Date().toISOString(),
+            is_update: true
+          }),
+        });
+      } catch (syncErr) {
+        console.error("Sheets update sync failed:", syncErr);
+      }
+
+      setSuccessMsg(`Invoice ${selectedOrder.order_number} details & item text updated successfully.`);
+      setShowEditModal(false);
+      setSelectedOrder(updatedOrder);
+      fetchOrders();
+      setTimeout(() => setSuccessMsg(""), 3500);
+    } catch (err) {
+      setEditError(err.message || "Failed to update invoice.");
+    } finally {
+      setSubmittingEdit(false);
     }
   };
 
@@ -636,6 +819,27 @@ export default function OrdersPage() {
                     </div>
                   </div>
                   <div style={styles.detailsHeaderActions}>
+                    {profile?.role === "owner" && selectedOrder.status !== "voided" && (
+                      <button
+                        onClick={handleOpenEditModal}
+                        className="btn btn-secondary"
+                        style={{
+                          height: "36px",
+                          padding: "0 12px",
+                          fontSize: "12px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          borderColor: "var(--primary)",
+                          color: "var(--primary)",
+                          background: "var(--primary-glow)"
+                        }}
+                        title="Owner Privileges: Correct letter errors in items or update bill details"
+                      >
+                        <Edit3 size={15} />
+                        <span>Edit Bill</span>
+                      </button>
+                    )}
                     {selectedOrder.status !== "voided" && selectedOrder.customers && !(selectedOrder.customers.name.toLowerCase().includes("walk-in") || selectedOrder.customers.name.toLowerCase().includes("unknown")) && (
                       <button
                         onClick={() => handleSendWhatsApp(selectedOrder)}
@@ -704,7 +908,30 @@ export default function OrdersPage() {
 
                 {/* Items details */}
                 <div style={styles.sectionCard}>
-                  <h3 style={styles.sectionTitle}>Print Job Specifications</h3>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+                    <h3 style={{ ...styles.sectionTitle, marginBottom: 0, borderBottom: "none", paddingBottom: 0 }}>Print Job Specifications</h3>
+                    {profile?.role === "owner" && selectedOrder.status !== "voided" && (
+                      <button
+                        onClick={handleOpenEditModal}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--primary)",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          padding: "2px 6px"
+                        }}
+                        title="Owner Access: Fix letter typos or item details"
+                      >
+                        <Edit3 size={13} />
+                        <span>Edit Items (Owner)</span>
+                      </button>
+                    )}
+                  </div>
                   <div style={styles.itemsTableWrapper}>
                     <table style={styles.table}>
                       <thead>
@@ -921,6 +1148,283 @@ export default function OrdersPage() {
                     <>
                       <Trash2 size={16} />
                       <span>Accept Responsibility & Void</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* OWNER EDIT INVOICE MODAL */}
+      {showEditModal && selectedOrder && (
+        <div style={styles.modalOverlay}>
+          <div className="glass-panel-elevated animate-fade-in" style={{ ...styles.modalCard, maxWidth: "680px", maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={styles.modalHeader}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <h3 style={{ ...styles.modalTitle, color: "var(--primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <ShieldCheck size={22} />
+                    <span>Edit Bill #{selectedOrder.order_number}</span>
+                  </h3>
+                  <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+                    Owner Privileges: Correct letter errors, rename items, adjust rates, or fix job descriptions.
+                  </p>
+                </div>
+                <span style={{
+                  fontSize: "11px",
+                  fontWeight: "700",
+                  textTransform: "uppercase",
+                  padding: "3px 8px",
+                  borderRadius: "4px",
+                  background: "var(--primary-glow)",
+                  color: "var(--primary)",
+                  border: "1px solid var(--primary)"
+                }}>
+                  Owner Only
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveEditInvoice} style={styles.modalForm}>
+              {editError && (
+                <div style={{
+                  background: "rgba(239, 68, 68, 0.1)",
+                  border: "1px solid var(--accent-red)",
+                  color: "var(--accent-red)",
+                  padding: "10px 14px",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px"
+                }}>
+                  <AlertCircle size={16} />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <label style={{ ...styles.modalLabel, fontWeight: "700", color: "var(--text-main)" }}>Item Lines</label>
+                  <button
+                    type="button"
+                    onClick={handleAddItemRow}
+                    className="btn btn-secondary"
+                    style={{ height: "28px", padding: "0 10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+                  >
+                    <Plus size={14} />
+                    <span>Add Item</span>
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {editItems.map((item, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "12px",
+                        borderRadius: "var(--radius-sm)",
+                        background: "rgba(255, 255, 255, 0.02)",
+                        border: "1px solid var(--border)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px"
+                      }}
+                    >
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-muted)", width: "20px" }}>#{idx + 1}</span>
+                        <input
+                          type="text"
+                          placeholder="Item Description / Name (Fix spelling or typos here)"
+                          className="input-field"
+                          style={{ flex: 1, height: "36px", fontSize: "13px" }}
+                          value={item.name}
+                          onChange={(e) => handleItemFieldChange(idx, "name", e.target.value)}
+                          required
+                          disabled={submittingEdit}
+                        />
+                        {editItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItemRow(idx)}
+                            style={{
+                              background: "rgba(239, 68, 68, 0.1)",
+                              border: "1px solid rgba(239, 68, 68, 0.2)",
+                              color: "var(--accent-red)",
+                              width: "34px",
+                              height: "34px",
+                              borderRadius: "var(--radius-sm)",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center"
+                            }}
+                            title="Remove this item"
+                            disabled={submittingEdit}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.2fr 1fr", gap: "8px", alignItems: "center" }}>
+                        <div>
+                          <label style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "2px", display: "block" }}>Price (LKR)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            placeholder="0"
+                            className="input-field"
+                            style={{ height: "34px", fontSize: "13px", width: "100%" }}
+                            value={item.price}
+                            onChange={(e) => handleItemFieldChange(idx, "price", e.target.value)}
+                            required
+                            disabled={submittingEdit}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "2px", display: "block" }}>Qty</label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0.01"
+                            placeholder="1"
+                            className="input-field"
+                            style={{ height: "34px", fontSize: "13px", width: "100%" }}
+                            value={item.qty}
+                            onChange={(e) => handleItemFieldChange(idx, "qty", e.target.value)}
+                            required
+                            disabled={submittingEdit}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "2px", display: "block" }}>Discount</label>
+                          <div style={{ display: "flex", gap: "4px" }}>
+                            <select
+                              className="input-field"
+                              style={{ height: "34px", fontSize: "12px", padding: "0 6px", width: "70px" }}
+                              value={item.discount_type || "none"}
+                              onChange={(e) => handleItemFieldChange(idx, "discount_type", e.target.value)}
+                              disabled={submittingEdit}
+                            >
+                              <option value="none">None</option>
+                              <option value="percentage">%</option>
+                              <option value="fixed">LKR</option>
+                            </select>
+                            {item.discount_type && item.discount_type !== "none" && (
+                              <input
+                                type="number"
+                                step="any"
+                                placeholder="Val"
+                                className="input-field"
+                                style={{ height: "34px", fontSize: "12px", width: "65px" }}
+                                value={item.discount_value || ""}
+                                onChange={(e) => handleItemFieldChange(idx, "discount_value", e.target.value)}
+                                disabled={submittingEdit}
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "2px", display: "block", textAlign: "right" }}>Subtotal</label>
+                          <div style={{ height: "34px", display: "flex", alignItems: "center", justifyContent: "flex-end", fontWeight: "700", fontSize: "13px", color: "var(--primary)" }}>
+                            {formatCurrency(item.total || 0)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={styles.modalInputGroup}>
+                <label style={styles.modalLabel}>Special Note / Job Remarks (Optional)</label>
+                <textarea
+                  placeholder="Additional order instructions or notes"
+                  className="input-field"
+                  style={{
+                    width: "100%",
+                    minHeight: "60px",
+                    padding: "8px 12px",
+                    fontSize: "13px",
+                    resize: "vertical",
+                    background: "rgba(255,255,255,0.01)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-main)",
+                    borderRadius: "var(--radius-sm)"
+                  }}
+                  value={editSpecialNote}
+                  onChange={(e) => setEditSpecialNote(e.target.value)}
+                  disabled={submittingEdit}
+                />
+              </div>
+
+              {/* Live Financial Summary */}
+              {(() => {
+                const calcNewTotal = editItems.reduce((sum, it) => sum + Number(it.total || 0), 0);
+                const paidAmt = Number(selectedOrder.paid_amount || 0);
+                const calcNewBalance = Math.max(0, calcNewTotal - paidAmt);
+                return (
+                  <div style={{
+                    padding: "12px 16px",
+                    borderRadius: "var(--radius-sm)",
+                    background: "rgba(99, 102, 241, 0.06)",
+                    border: "1px solid rgba(99, 102, 241, 0.2)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    fontSize: "13px"
+                  }}>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>New Bill Total: </span>
+                      <strong style={{ color: "var(--text-main)", fontSize: "15px" }}>{formatCurrency(calcNewTotal)}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Paid: </span>
+                      <strong style={{ color: "var(--accent-green)" }}>{formatCurrency(paidAmt)}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Updated Balance: </span>
+                      <strong style={{ color: calcNewBalance > 0 ? "var(--accent-orange)" : "var(--accent-green)", fontSize: "15px" }}>
+                        {formatCurrency(calcNewBalance)}
+                      </strong>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div style={styles.modalBtnRow}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowEditModal(false)}
+                  disabled={submittingEdit}
+                  style={{ height: "38px" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{
+                    height: "38px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px"
+                  }}
+                  disabled={submittingEdit}
+                >
+                  {submittingEdit ? (
+                    <span>Saving Changes...</span>
+                  ) : (
+                    <>
+                      <Save size={16} />
+                      <span>Save & Update Bill</span>
                     </>
                   )}
                 </button>

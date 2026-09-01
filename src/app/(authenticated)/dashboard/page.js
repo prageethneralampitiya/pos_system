@@ -280,23 +280,14 @@ export default function DashboardPage() {
 
       if (todayError) throw todayError;
 
-      // 2. Fetch Outstanding Balance (Pending Payments)
-      const { data: unpaidOrders, error: unpaidError } = await supabase
-        .from("orders")
-        .select("balance_amount")
-        .gt("balance_amount", 0)
-        .neq("status", "voided");
-
-      if (unpaidError) throw unpaidError;
-
-      // 3. Fetch Customer Count
-      const { count: customersCount, error: custError } = await supabase
+      // 2. Fetch Customers for Count and Outstanding Balance
+      const { data: customersData, error: custError } = await supabase
         .from("customers")
-        .select("*", { count: "exact", head: true });
+        .select("id, outstanding_balance");
 
       if (custError) throw custError;
 
-      // 4. Fetch 5 Recent Orders with Customer Details
+      // 3. Fetch 5 Recent Orders with Customer Details
       const { data: recent, error: recentError } = await supabase
         .from("orders")
         .select(`
@@ -320,16 +311,19 @@ export default function DashboardPage() {
         salesSum += Number(order.total_amount || 0);
       });
 
-      let pendingSum = 0;
-      unpaidOrders?.forEach(order => {
-        pendingSum += Number(order.balance_amount || 0);
+      let totalCustomerOutstanding = 0;
+      customersData?.forEach(cust => {
+        const bal = Number(cust.outstanding_balance || 0);
+        if (bal > 0) {
+          totalCustomerOutstanding += bal;
+        }
       });
 
       setStats({
         todaySales: salesSum,
         todayOrdersCount: ordersCount,
-        pendingPayments: pendingSum,
-        customersCount: customersCount || 0,
+        pendingPayments: totalCustomerOutstanding,
+        customersCount: customersData?.length || 0,
       });
       setRecentOrders(recent || []);
       setFetchError(false);
@@ -353,9 +347,9 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchDashboardData();
 
-    // Set up real-time subscription for orders
-    const ordersChannel = supabase
-      .channel("dashboard-orders-realtime")
+    // Set up real-time subscription for orders and customers
+    const dashboardChannel = supabase
+      .channel("dashboard-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "orders" },
@@ -364,10 +358,18 @@ export default function DashboardPage() {
           fetchDashboardData();
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customers" },
+        () => {
+          setRefreshing(true);
+          fetchDashboardData();
+        }
+      )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(ordersChannel);
+      supabase.removeChannel(dashboardChannel);
     };
   }, []);
 
