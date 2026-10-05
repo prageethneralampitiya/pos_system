@@ -83,6 +83,55 @@ export default function CustomersPage() {
   const [showOrderDetailsModal, setShowOrderDetailsModal] = useState(false);
   const [showQuoteDetailsModal, setShowQuoteDetailsModal] = useState(false);
 
+  // Print Statement Modal States
+  const [showPrintStatementModal, setShowPrintStatementModal] = useState(false);
+  const [printStartDate, setPrintStartDate] = useState("");
+  const [printEndDate, setPrintEndDate] = useState("");
+  const [printQuickRange, setPrintQuickRange] = useState("all");
+
+  const handleApplyPrintPreset = (rangeType) => {
+    setPrintQuickRange(rangeType);
+    const today = new Date();
+    const endStr = today.toISOString().split("T")[0];
+
+    if (rangeType === "all") {
+      setPrintStartDate("");
+      setPrintEndDate("");
+    } else if (rangeType === "today") {
+      setPrintStartDate(endStr);
+      setPrintEndDate(endStr);
+    } else if (rangeType === "this_month") {
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      setPrintStartDate(firstDay.toISOString().split("T")[0]);
+      setPrintEndDate(endStr);
+    } else if (rangeType === "last_month") {
+      const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+      setPrintStartDate(firstDay.toISOString().split("T")[0]);
+      setPrintEndDate(lastDay.toISOString().split("T")[0]);
+    } else if (rangeType === "last_30") {
+      const d = new Date(today);
+      d.setDate(d.getDate() - 30);
+      setPrintStartDate(d.toISOString().split("T")[0]);
+      setPrintEndDate(endStr);
+    } else if (rangeType === "this_year") {
+      setPrintStartDate(`${today.getFullYear()}-01-01`);
+      setPrintEndDate(endStr);
+    }
+  };
+
+  const handleLaunchPrintStatement = () => {
+    if (!selectedCust) return;
+    let url = `/customers/${selectedCust.id}/print`;
+    const params = new URLSearchParams();
+    if (printStartDate) params.set("start", printStartDate);
+    if (printEndDate) params.set("end", printEndDate);
+    const query = params.toString();
+    if (query) url += `?${query}`;
+    window.open(url, "_blank");
+    setShowPrintStatementModal(false);
+  };
+
   const handleOpenOrderDetails = (order) => {
     setSelectedOrderDetails(order);
     setShowOrderDetailsModal(true);
@@ -857,7 +906,10 @@ export default function CustomersPage() {
 
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                     <button
-                      onClick={() => window.open(`/customers/${selectedCust.id}/print`, "_blank")}
+                      onClick={() => {
+                        handleApplyPrintPreset("all");
+                        setShowPrintStatementModal(true);
+                      }}
                       className="btn btn-secondary"
                       style={{ height: "36px", padding: "0 14px", fontSize: "12px", display: "flex", alignItems: "center", gap: "6px" }}
                     >
@@ -1630,6 +1682,142 @@ export default function CustomersPage() {
                 style={{ height: "40px" }}
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Print Statement Date Range Modal */}
+      {showPrintStatementModal && selectedCust && (
+        <div style={styles.modalOverlay}>
+          <div className="glass-panel modal-content" style={{ ...styles.modalContent, maxWidth: "520px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border)", paddingBottom: "12px", marginBottom: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: "rgba(99,102,241,0.1)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--primary)" }}>
+                  <Printer size={18} />
+                </div>
+                <div>
+                  <h3 style={styles.modalTitle}>Print Customer Statement</h3>
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                    Select statement date range &amp; filter options
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowPrintStatementModal(false)}
+                style={styles.closeBtn}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Customer Summary Banner */}
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 14px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "14px", color: "var(--text-main)" }}>{selectedCust.name}</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>{selectedCust.phone}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Total Balance</div>
+                <div style={{ fontSize: "15px", fontWeight: 800, color: Number(selectedCust.outstanding_balance || 0) > 0 ? "var(--accent-orange)" : Number(selectedCust.outstanding_balance || 0) < 0 ? "var(--accent-green)" : "var(--text-main)" }}>
+                  {Number(selectedCust.outstanding_balance || 0) < 0 
+                    ? `${formatCurrency(Math.abs(selectedCust.outstanding_balance))} CR` 
+                    : formatCurrency(selectedCust.outstanding_balance || 0)}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Quick Date Range Presets
+              </label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                {[
+                  { id: "all", label: "All Time" },
+                  { id: "today", label: "Today" },
+                  { id: "this_month", label: "This Month" },
+                  { id: "last_month", label: "Last Month" },
+                  { id: "last_30", label: "Last 30 Days" },
+                  { id: "this_year", label: "This Year" }
+                ].map(preset => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleApplyPrintPreset(preset.id)}
+                    className="btn btn-secondary"
+                    style={{
+                      height: "30px",
+                      padding: "0 10px",
+                      fontSize: "11px",
+                      borderRadius: "6px",
+                      borderColor: printQuickRange === preset.id ? "var(--primary)" : "var(--border)",
+                      background: printQuickRange === preset.id ? "rgba(99,102,241,0.15)" : "transparent",
+                      color: printQuickRange === preset.id ? "var(--primary)" : "var(--text-main)",
+                      fontWeight: printQuickRange === preset.id ? 700 : 500
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Range Inputs */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  className="input-field"
+                  value={printStartDate}
+                  onChange={(e) => {
+                    setPrintStartDate(e.target.value);
+                    setPrintQuickRange("custom");
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: "11px", color: "var(--text-muted)", display: "block", marginBottom: "4px" }}>
+                  End Date
+                </label>
+                <input
+                  type="date"
+                  className="input-field"
+                  value={printEndDate}
+                  onChange={(e) => {
+                    setPrintEndDate(e.target.value);
+                    setPrintQuickRange("custom");
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
+
+            {/* Summary info */}
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "20px", background: "rgba(99,102,241,0.04)", padding: "8px 12px", borderRadius: "6px", border: "1px solid rgba(99,102,241,0.15)" }}>
+              ℹ️ Statement includes chronological transactions, invoices, settlements, and a dedicated <strong>Total Outstanding Balance</strong> column for each day.
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button 
+                onClick={() => setShowPrintStatementModal(false)}
+                className="btn btn-secondary"
+                style={{ height: "38px", padding: "0 14px" }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleLaunchPrintStatement}
+                className="btn btn-primary"
+                style={{ height: "38px", padding: "0 18px", display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <Printer size={15} />
+                <span>Generate &amp; Print Statement</span>
               </button>
             </div>
           </div>

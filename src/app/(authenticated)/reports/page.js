@@ -365,22 +365,48 @@ export default function ReportsPage() {
   const fetchCustomerSpecificData = async () => {
     setCustomerLoading(true);
     try {
-      // Fetch selected customer's orders in this range
-      let ordQuery = supabase
+      // 1. Fetch customer to get current balance
+      const currentCust = customers.find(c => c.id === selectedCustomerId);
+      const custDebt = Number(currentCust?.outstanding_balance || 0);
+
+      // 2. Fetch all historical non-voided orders to compute running balance
+      const { data: allOrds } = await supabase
         .from("orders")
         .select("*")
-        .eq("customer_id", selectedCustomerId);
-      
+        .eq("customer_id", selectedCustomerId)
+        .neq("status", "voided")
+        .order("created_at", { ascending: true });
+
+      const rawOrders = allOrds || [];
+      const totalNet = rawOrders.reduce((sum, o) => {
+        return sum + (Number(o.total_amount || 0) - Number(o.paid_amount || 0));
+      }, 0);
+      const baseline = custDebt - totalNet;
+
+      let running = baseline;
+      const computed = rawOrders.map(o => {
+        const net = Number(o.total_amount || 0) - Number(o.paid_amount || 0);
+        running += net;
+        return {
+          ...o,
+          running_balance: running
+        };
+      });
+
+      // Filter by range
+      let inRange = computed;
       if (startDate) {
-        ordQuery = ordQuery.gte("created_at", new Date(startDate).toISOString());
+        const sD = new Date(startDate);
+        sD.setHours(0, 0, 0, 0);
+        inRange = inRange.filter(o => new Date(o.created_at) >= sD);
       }
       if (endDate) {
-        const endDay = new Date(endDate);
-        endDay.setHours(23, 59, 59, 999);
-        ordQuery = ordQuery.lte("created_at", endDay.toISOString());
+        const eD = new Date(endDate);
+        eD.setHours(23, 59, 59, 999);
+        inRange = inRange.filter(o => new Date(o.created_at) <= eD);
       }
-      const { data: ords } = await ordQuery.order("created_at", { ascending: false });
-      setCustomerOrders(ords || []);
+
+      setCustomerOrders([...inRange].reverse());
 
       // Fetch selected customer's quotations in this range
       let quoteQuery = supabase
@@ -803,35 +829,43 @@ export default function ReportsPage() {
                       <table style={styles.table}>
                         <thead>
                           <tr>
-                            <th style={styles.th}>Date</th>
-                            <th style={styles.th}>Reference No</th>
-                            <th style={{ ...styles.th, textAlign: "right" }}>Total Amount</th>
-                            <th style={{ ...styles.th, textAlign: "right" }}>Paid Amount</th>
-                            <th style={{ ...styles.th, textAlign: "right" }}>Remaining Balance</th>
-                            <th style={styles.th}>Status</th>
+                            <th style={{ ...styles.th, width: "35px", textAlign: "center" }}>#</th>
+                            <th style={{ ...styles.th, width: "85px", whiteSpace: "nowrap" }}>Date</th>
+                            <th style={{ ...styles.th, whiteSpace: "nowrap" }}>Reference No</th>
+                            <th style={{ ...styles.th, textAlign: "right", whiteSpace: "nowrap" }}>Total Amount</th>
+                            <th style={{ ...styles.th, textAlign: "right", whiteSpace: "nowrap" }}>Paid Amount</th>
+                            <th style={{ ...styles.th, textAlign: "right", whiteSpace: "nowrap" }}>Remaining Balance</th>
+                            <th style={{ ...styles.th, textAlign: "center", whiteSpace: "nowrap" }}>Status</th>
+                            <th style={{ ...styles.th, textAlign: "right", width: "115px", whiteSpace: "nowrap" }}>Total Outstanding</th>
                           </tr>
                         </thead>
                         <tbody>
                           {customerOrders.length === 0 ? (
                             <tr>
-                              <td colSpan="6" style={styles.emptyRow}>No invoices logged for this client during this period.</td>
+                              <td colSpan="8" style={styles.emptyRow}>No invoices logged for this client during this period.</td>
                             </tr>
                           ) : (
-                            customerOrders.map(order => (
+                            customerOrders.map((order, idx) => (
                               <tr key={order.id} style={styles.tr}>
-                                <td style={styles.td}>{new Date(order.created_at).toLocaleDateString()}</td>
-                                <td style={{ ...styles.td, fontWeight: "600", color: "var(--secondary)" }}>{order.order_number}</td>
-                                <td style={{ ...styles.td, textAlign: "right" }}>{formatCurrency(order.total_amount)}</td>
-                                <td style={{ ...styles.td, textAlign: "right", color: "var(--accent-green)" }}>{formatCurrency(order.paid_amount)}</td>
-                                <td style={{ ...styles.td, textAlign: "right", fontWeight: "600", color: order.balance_amount > 0 ? "var(--accent-orange)" : "var(--text-main)" }}>
+                                <td style={{ ...styles.td, textAlign: "center", color: "var(--text-muted)" }}>{idx + 1}</td>
+                                <td style={{ ...styles.td, whiteSpace: "nowrap" }}>{new Date(order.created_at).toLocaleDateString()}</td>
+                                <td style={{ ...styles.td, fontWeight: "600", color: "var(--secondary)", whiteSpace: "nowrap" }}>{order.order_number}</td>
+                                <td style={{ ...styles.td, textAlign: "right", whiteSpace: "nowrap" }}>{formatCurrency(order.total_amount)}</td>
+                                <td style={{ ...styles.td, textAlign: "right", color: "var(--accent-green)", whiteSpace: "nowrap" }}>{formatCurrency(order.paid_amount)}</td>
+                                <td style={{ ...styles.td, textAlign: "right", fontWeight: "600", color: order.balance_amount > 0 ? "var(--accent-orange)" : "var(--text-main)", whiteSpace: "nowrap" }}>
                                   {formatCurrency(order.balance_amount)}
                                 </td>
-                                <td style={styles.td}>
+                                <td style={{ ...styles.td, textAlign: "center", whiteSpace: "nowrap" }}>
                                   <span className={`badge ${
                                     order.status === "paid" ? "badge-paid" : order.status === "partially_paid" ? "badge-partial" : "badge-pending"
                                   }`}>
                                     {order.status?.replace("_", " ")}
                                   </span>
+                                </td>
+                                <td style={{ ...styles.td, textAlign: "right", fontWeight: "700", color: Number(order.running_balance) > 0 ? "var(--accent-orange)" : Number(order.running_balance) < 0 ? "var(--accent-green)" : "var(--text-main)", whiteSpace: "nowrap" }}>
+                                  {Number(order.running_balance) < 0 
+                                    ? `${formatCurrency(Math.abs(order.running_balance))} CR` 
+                                    : formatCurrency(order.running_balance || 0)}
                                 </td>
                               </tr>
                             ))
