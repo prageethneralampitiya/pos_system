@@ -190,7 +190,13 @@ export default function LoginPage() {
 
               <button
                 type="submit"
-                className="btn btn-primary submit-btn"
+                className="btn submit-btn"
+                style={{
+                  background: "linear-gradient(135deg, #e11d48 0%, #be123c 55%, #9f1239 100%)",
+                  boxShadow: "0 10px 25px -5px rgba(225, 29, 72, 0.5), 0 0 15px rgba(225, 29, 72, 0.2)",
+                  color: "#ffffff",
+                  border: "none",
+                }}
                 disabled={loading}
               >
                 <span>{loading ? "Authenticating..." : "Sign In to POS"}</span>
@@ -362,7 +368,7 @@ export default function LoginPage() {
           backdrop-filter: blur(28px);
           -webkit-backdrop-filter: blur(28px);
           border: 1px solid rgba(255, 255, 255, 0.12);
-          box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.9), 0 0 45px rgba(99, 102, 241, 0.15);
+          box-shadow: 0 30px 70px -15px rgba(0, 0, 0, 0.9), 0 0 45px rgba(225, 29, 72, 0.12);
           display: flex;
           flex-direction: column;
           gap: 24px;
@@ -436,8 +442,8 @@ export default function LoginPage() {
         }
 
         .input-field-wrapper .input-field:focus {
-          border-color: var(--primary);
-          box-shadow: 0 0 0 3px var(--primary-glow);
+          border-color: #f43f5e;
+          box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.2);
         }
 
         .password-input {
@@ -462,7 +468,7 @@ export default function LoginPage() {
           color: var(--text-main);
         }
 
-        .submit-btn {
+        button.submit-btn {
           width: 100%;
           height: 48px;
           margin-top: 6px;
@@ -473,10 +479,22 @@ export default function LoginPage() {
           align-items: center;
           justify-content: center;
           gap: 10px;
-          background: linear-gradient(135deg, hsl(244, 75%, 63%) 0%, hsl(244, 75%, 52%) 100%);
-          box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4);
+          color: #ffffff !important;
+          border: none !important;
+          background: linear-gradient(135deg, #e11d48 0%, #be123c 55%, #9f1239 100%) !important;
+          box-shadow: 0 10px 25px -5px rgba(225, 29, 72, 0.5), 0 0 15px rgba(225, 29, 72, 0.2) !important;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        button.submit-btn:hover:not(:disabled) {
+          background: linear-gradient(135deg, #f43f5e 0%, #e11d48 55%, #be123c 100%) !important;
+          box-shadow: 0 12px 30px -5px rgba(225, 29, 72, 0.65), 0 0 22px rgba(225, 29, 72, 0.3) !important;
+          transform: translateY(-1px);
+        }
+
+        button.submit-btn:active:not(:disabled) {
+          transform: translateY(0);
         }
 
         .alert {
