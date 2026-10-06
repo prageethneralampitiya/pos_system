@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { getNextOrderNumber, insertOrderWithRetry } from "@/lib/orderSequence";
 import { useAuth } from "@/components/AuthGuard";
 import { 
   Search, 
@@ -88,22 +89,24 @@ export default function QuotationsPage() {
 
     try {
       const date = new Date();
-      const yearMonth = `${date.getFullYear()}${(date.getMonth() + 1).toString().padStart(2, "0")}`;
+      const year = date.getFullYear();
 
-      // 1. Generate Order ID
-      const { data: countData } = await supabase
-        .from("orders")
-        .select("id")
-        .gte("created_at", new Date(date.getFullYear(), date.getMonth(), 1).toISOString());
+      let orderPrefix = "ORD";
+      let orderStartNumber = 1;
+      try {
+        const s = JSON.parse(localStorage.getItem("printx_shop_settings") || "{}");
+        if (s.orderPrefix) orderPrefix = s.orderPrefix;
+        if (s.orderStartNumber) orderStartNumber = Math.max(1, parseInt(s.orderStartNumber) || 1);
+      } catch (_) {}
 
-      const seq = ((countData?.length || 0) + 1).toString().padStart(4, "0");
-      const orderNum = `ORD-${yearMonth}-${seq}`;
+      // 1. Generate Order ID using unified sequence
+      const { orderNum: calculatedOrderNum } = await getNextOrderNumber(supabase, orderPrefix, year, orderStartNumber);
 
       // 2. Insert Order (Outstanding balance becomes full total as default since it was a quotation)
-      const { data: order, error: oError } = await supabase
-        .from("orders")
-        .insert({
-          order_number: orderNum,
+      const { order, orderNum } = await insertOrderWithRetry(
+        supabase,
+        {
+          order_number: calculatedOrderNum,
           customer_id: selectedQuotation.customer_id,
           total_amount: selectedQuotation.total_amount,
           paid_amount: 0,
@@ -113,11 +116,9 @@ export default function QuotationsPage() {
           created_by: profile.id,
           created_at: new Date().toISOString(),
           quotation_id: selectedQuotation.id
-        })
-        .select()
-        .single();
-
-      if (oError) throw oError;
+        },
+        { prefix: orderPrefix, year, startNumber: orderStartNumber }
+      );
 
       // 3. Update customer outstanding balance
       const { data: latestCust } = await supabase

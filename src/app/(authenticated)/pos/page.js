@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import { getNextOrderNumber, getNextQuotationNumber, insertOrderWithRetry } from "@/lib/orderSequence";
 import { useAuth } from "@/components/AuthGuard";
 import { 
   Plus, 
@@ -688,12 +689,6 @@ export default function POSPage() {
       const date = new Date();
       const year = date.getFullYear();
 
-      // 1. Fetch existing orders this year to find the maximum sequence number
-      const { data: existingOrders } = await supabase
-        .from("orders")
-        .select("order_number")
-        .gte("created_at", new Date(year, 0, 1).toISOString());
-
       let orderPrefix = "ORD";
       let orderStartNumber = 1;
       try {
@@ -702,28 +697,13 @@ export default function POSPage() {
         if (s.orderStartNumber) orderStartNumber = Math.max(1, parseInt(s.orderStartNumber) || 1);
       } catch (_) {}
 
-      let maxSeq = 0;
-      if (existingOrders && existingOrders.length > 0) {
-        existingOrders.forEach(o => {
-          if (o.order_number && o.order_number.startsWith(`${orderPrefix}-${year}-`)) {
-            const parts = o.order_number.split("-");
-            const numPart = parseInt(parts[parts.length - 1]);
-            if (!isNaN(numPart) && numPart > maxSeq) {
-              maxSeq = numPart;
-            }
-          }
-        });
-      }
+      const { orderNum: initialOrderNum } = await getNextOrderNumber(supabase, orderPrefix, year, orderStartNumber);
 
-      const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
-      const seq = nextSeq.toString().padStart(4, "0");
-      const orderNum = `${orderPrefix}-${year}-${seq}`;
-
-      // 2. Insert Order for Advance Payment
-      const { data: order, error: oError } = await supabase
-        .from("orders")
-        .insert({
-          order_number: orderNum,
+      // 2. Insert Order for Advance Payment with collision retry
+      const { order, orderNum } = await insertOrderWithRetry(
+        supabase,
+        {
+          order_number: initialOrderNum,
           customer_id: selectedCustomer.id,
           total_amount: amount,
           paid_amount: amount,
@@ -733,11 +713,9 @@ export default function POSPage() {
           items: [{ name: "Advance Payment", qty: 1, price: amount, total: amount }],
           created_by: profile?.username || "Unknown",
           created_at: new Date().toISOString()
-        })
-        .select()
-        .single();
-
-      if (oError) throw oError;
+        },
+        { prefix: orderPrefix, year, startNumber: orderStartNumber }
+      );
 
       // 3. Update customer outstanding balance
       // Since it is an advance payment, it reduces their outstanding balance (moving it negative if credit)
@@ -902,28 +880,7 @@ export default function POSPage() {
       }
 
       if (isQuotation) {
-        // 1. Fetch existing quotations this year to find the maximum sequence number
-        const { data: existingQuotes } = await supabase
-          .from("quotations")
-          .select("quotation_number")
-          .gte("created_at", new Date(year, 0, 1).toISOString());
-
-        let maxSeq = 0;
-        if (existingQuotes && existingQuotes.length > 0) {
-          existingQuotes.forEach(q => {
-            if (q.quotation_number && q.quotation_number.startsWith(`QT-${year}-`)) {
-              const parts = q.quotation_number.split("-");
-              const numPart = parseInt(parts[parts.length - 1]);
-              if (!isNaN(numPart) && numPart > maxSeq) {
-                maxSeq = numPart;
-              }
-            }
-          });
-        }
-
-        const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
-        const seq = nextSeq.toString().padStart(4, "0");
-        const quotationNum = `QT-${year}-${seq}`;
+        const { quotationNum } = await getNextQuotationNumber(supabase, year);
 
         // 2. Insert Quotation
         const { data: quotation, error: qError } = await supabase
@@ -963,28 +920,7 @@ export default function POSPage() {
         }, 1500);
 
       } else {
-        // 1. Fetch existing orders this year to find the maximum sequence number
-        const { data: existingOrders } = await supabase
-          .from("orders")
-          .select("order_number")
-          .gte("created_at", new Date(year, 0, 1).toISOString());
-
-        let maxSeq = 0;
-        if (existingOrders && existingOrders.length > 0) {
-          existingOrders.forEach(o => {
-            if (o.order_number && o.order_number.startsWith(`${orderPrefix}-${year}-`)) {
-              const parts = o.order_number.split("-");
-              const numPart = parseInt(parts[parts.length - 1]);
-              if (!isNaN(numPart) && numPart > maxSeq) {
-                maxSeq = numPart;
-              }
-            }
-          });
-        }
-
-        const nextSeq = Math.max(maxSeq + 1, orderStartNumber);
-        const seq = nextSeq.toString().padStart(4, "0");
-        const orderNum = `${orderPrefix}-${year}-${seq}`;
+        const { orderNum: calculatedOrderNum } = await getNextOrderNumber(supabase, orderPrefix, year, orderStartNumber);
 
         const isRegisteredCust = customerToUse && 
           !customerToUse.name.toLowerCase().includes("walk-in") && 
@@ -1019,11 +955,11 @@ export default function POSPage() {
           orderStatus = "partially_paid";
         }
 
-        // 2. Insert Order
-        const { data: order, error: oError } = await supabase
-          .from("orders")
-          .insert({
-            order_number: orderNum,
+        // 2. Insert Order with collision retry
+        const { order, orderNum } = await insertOrderWithRetry(
+          supabase,
+          {
+            order_number: calculatedOrderNum,
             customer_id: customerToUse.id,
             total_amount: totalAmount,
             paid_amount: effectivePaid,
@@ -1042,11 +978,9 @@ export default function POSPage() {
             })),
             created_by: profile.id,
             created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (oError) throw oError;
+          },
+          { prefix: orderPrefix, year, startNumber: orderStartNumber }
+        );
 
         // 3. Update customer outstanding balance
         // We adjust their balance by the applied credit (spent credit increases outstanding balance)

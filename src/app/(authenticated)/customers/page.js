@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { getNextPaymentNumber } from "@/lib/orderSequence";
 import { useAuth } from "@/components/AuthGuard";
 import { 
   Search, 
@@ -389,26 +390,7 @@ export default function CustomersPage() {
       const year = new Date().getFullYear();
 
       // 1. Generate unique PAY- number
-      const { data: existingOrders } = await supabase
-        .from("orders")
-        .select("order_number")
-        .gte("created_at", new Date(year, 0, 1).toISOString());
-
-      let maxSeq = 0;
-      if (existingOrders && existingOrders.length > 0) {
-        existingOrders.forEach(o => {
-          if (o.order_number && o.order_number.startsWith(`PAY-${year}-`)) {
-            const parts = o.order_number.split("-");
-            const numPart = parseInt(parts[parts.length - 1]);
-            if (!isNaN(numPart) && numPart > maxSeq) {
-              maxSeq = numPart;
-            }
-          }
-        });
-      }
-
-      const seq = (maxSeq + 1).toString().padStart(4, "0");
-      const paymentNum = `PAY-${year}-${seq}`;
+      const { paymentNum } = await getNextPaymentNumber(supabase, year);
 
       // 2. Insert Advance Payment order (total = 0, paid = amount)
       const { data: paymentOrder, error: oError } = await supabase
@@ -502,26 +484,7 @@ export default function CustomersPage() {
       const year = new Date().getFullYear();
 
       // 1. Generate unique order/payment receipt number based on max existing PAY- number
-      const { data: existingOrders } = await supabase
-        .from("orders")
-        .select("order_number")
-        .gte("created_at", new Date(year, 0, 1).toISOString());
-
-      let maxSeq = 0;
-      if (existingOrders && existingOrders.length > 0) {
-        existingOrders.forEach(o => {
-          if (o.order_number && o.order_number.startsWith(`PAY-${year}-`)) {
-            const parts = o.order_number.split("-");
-            const numPart = parseInt(parts[parts.length - 1]);
-            if (!isNaN(numPart) && numPart > maxSeq) {
-              maxSeq = numPart;
-            }
-          }
-        });
-      }
-
-      const seq = (maxSeq + 1).toString().padStart(4, "0");
-      const paymentNum = `PAY-${year}-${seq}`;
+      const { paymentNum } = await getNextPaymentNumber(supabase, year);
 
       // 2. Insert Payment Transaction in Orders table as a dedicated Payment Order
       // Sales bills remain untouched (pending stays pending forever)
